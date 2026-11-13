@@ -36,3 +36,11 @@ ADR-lite. Each entry records the context, the decision, and the alternatives we 
 ## D7 — Object key scheme
 **Decision:** `<prefix>YYYY/MM/DD/<uuid8>-<sanitized original name>`. The original filename is kept verbatim in metadata.
 **Why:** Uploading the same filename twice never overwrites anything, the keys are browsable by date in the B2 UI, and the sanitization blocks `../` tricks.
+
+## D8 — Large inputs: explicit truncation, not silent
+**Decision:** Text over 150k characters (~40k tokens) is cut. The prompt tells the model it is reading only the beginning, and the API response returns `truncated_input: true`. Images are downscaled to a 1568 px long edge before they're sent. That's the resolution Claude's vision actually uses, so it costs less and runs faster with no loss of quality.
+**Rejected:** Chunked map-reduce summarization of huge files. It would be more complete, but a "short description" doesn't need it, and it multiplies cost and latency. It's a possible later iteration.
+
+## D9 — File type by content sniffing
+**Decision:** Classify from the bytes rather than the client-supplied `Content-Type` or extension.
+**Why:** Browsers send `application/octet-stream` for many files, and extensions lie. Sniffing is cheap and keeps us from sending binary junk to the model.
