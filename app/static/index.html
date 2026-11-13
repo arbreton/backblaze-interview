@@ -1,1 +1,116 @@
-<!doctype html><title>B2 Describe</title><p>UI coming in step 4.</p>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>B2 Describe</title>
+  <meta name="description" content="Store files in Backblaze B2 with an AI-generated description attached as metadata.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23e21e29'/><text x='16' y='22' font-size='15' font-family='system-ui' font-weight='700' fill='white' text-anchor='middle'>B2</text></svg>">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="wrap top-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">B2</span>
+        <div>
+          <h1>B2 Describe</h1>
+          <p class="sub">Store a file in Backblaze B2. Claude writes a caption or summary and attaches it as metadata.</p>
+        </div>
+      </div>
+      <ul class="health" id="health" aria-label="Service status">
+        <li class="pill" data-state="loading"><span class="dot" aria-hidden="true"></span>Backblaze B2</li>
+        <li class="pill" data-state="loading"><span class="dot" aria-hidden="true"></span>Claude</li>
+      </ul>
+    </div>
+  </header>
+
+  <main id="main" class="wrap">
+    <div id="config-banner" class="banner" role="alert" hidden></div>
+
+    <section class="card" aria-labelledby="add-title">
+      <div class="card-head">
+        <h2 id="add-title">Add files</h2>
+        <div class="tabs" role="tablist" aria-label="Input method">
+          <button role="tab" id="tab-upload" aria-controls="panel-upload" aria-selected="true">Upload</button>
+          <button role="tab" id="tab-path" aria-controls="panel-path" aria-selected="false" tabindex="-1">Local path</button>
+        </div>
+      </div>
+
+      <div id="panel-upload" role="tabpanel" aria-labelledby="tab-upload">
+        <label class="drop" id="drop" for="file-input">
+          <input id="file-input" type="file" multiple class="visually-hidden">
+          <svg class="drop-icon" aria-hidden="true" viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <span class="drop-title"><strong>Drop files here</strong> or <span class="link">browse</span></span>
+          <span class="drop-hint" id="drop-hint">Images get a caption. PDFs and text files get a summary. Other files are stored without a description. Max 50 MB each.</span>
+        </label>
+        <p class="kbd-hint">Tip: you can also paste an image with <kbd>⌘</kbd><kbd>V</kbd>.</p>
+      </div>
+
+      <div id="panel-path" role="tabpanel" aria-labelledby="tab-path" hidden>
+        <form id="path-form" class="path-form" novalidate>
+          <label for="path-input">Path to a file on this machine</label>
+          <div class="row">
+            <input id="path-input" name="path" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="~/Desktop/photo.jpg" aria-describedby="path-help" required>
+            <button class="btn primary" type="submit">Store &amp; describe</button>
+          </div>
+          <p id="path-help" class="help">For safety, only files inside <code id="path-root">~/Desktop</code> are allowed.</p>
+        </form>
+      </div>
+    </section>
+
+    <section aria-labelledby="results-title" id="results-section" hidden>
+      <div class="section-head">
+        <h2 id="results-title">This session</h2>
+        <button class="btn ghost small" id="clear-results" type="button">Clear</button>
+      </div>
+      <ol class="results" id="results"></ol>
+    </section>
+
+    <section aria-labelledby="recent-title">
+      <div class="section-head">
+        <h2 id="recent-title">In the bucket</h2>
+        <button class="btn ghost small" id="refresh-recent" type="button">Refresh</button>
+      </div>
+      <div id="recent" class="recent" aria-busy="false">
+        <p class="empty">Loading…</p>
+      </div>
+    </section>
+
+    <details class="card api">
+      <summary>Use the API (curl)</summary>
+      <pre><code id="curl-snippet"></code></pre>
+      <p class="help">Interactive API docs are at <a href="/docs">/docs</a>.</p>
+    </details>
+  </main>
+
+  <div id="sr-status" class="visually-hidden" role="status" aria-live="polite"></div>
+
+  <template id="result-tpl">
+    <li class="result" data-status="working">
+      <div class="thumb" aria-hidden="true"></div>
+      <div class="body">
+        <div class="result-head">
+          <h3 class="name"></h3>
+          <span class="badge"></span>
+        </div>
+        <p class="meta"></p>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+        <p class="stage"></p>
+        <blockquote class="desc" hidden></blockquote>
+        <ul class="tags" aria-label="Tags" hidden></ul>
+        <p class="note" hidden></p>
+        <div class="actions" hidden>
+          <button class="btn small copy" type="button">Copy description</button>
+          <a class="btn small ghost open" target="_blank" rel="noopener">Open file</a>
+        </div>
+      </div>
+    </li>
+  </template>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

@@ -44,3 +44,25 @@ One entry per step/iteration. Each step ends in a git commit (`git log --oneline
   - If B2 isn't configured, the API returns a clear 503 that points to `docs/B2_SETUP.md`.
 - `cli.py`: `cli.py <paths…>` and `cli.py --check`.
 - Tests: 17 passing. Covers the end-to-end upload (metadata verified in the bucket), unsupported → skipped, refusal → still stored, 413, path sandbox (`/etc/hosts` and `..` → 403).
+
+## Step 4 — Web UI
+- `app/static/{index.html,app.css,app.js}`: vanilla HTML/CSS/JS with no build step, served by FastAPI at `/`.
+- UX:
+  - Drag and drop, a file picker, multi-file uploads (2 at a time), and paste-to-upload (⌘V).
+  - Real upload progress (XHR), then an explicit "Storing in B2 and generating description…" phase.
+  - Result cards show: status badge (Described / Stored / Failed), size, type, total time, description, tags, Copy and Open (presigned URL) buttons.
+  - "Local path" tab, which uses the sandboxed endpoint.
+  - "In the bucket" list reads metadata back from B2, which proves it was attached.
+  - Health pills plus a setup banner that names the missing `.env` keys when B2 isn't configured.
+  - curl snippet panel.
+- Accessibility:
+  - Semantic landmarks and a skip link.
+  - WAI-ARIA tabs with arrow-key navigation.
+  - Visible focus rings, 44 px touch targets, `aria-live` announcements for results, `role=progressbar`.
+  - Status is conveyed by text, not just color.
+  - `prefers-color-scheme` dark mode and `prefers-reduced-motion`.
+- Security: every server or user string is rendered via `textContent`, never `innerHTML`.
+- **Verification:**
+  - End-to-end over HTTP against a local S3 emulator (`moto_server`) with the **real Claude API**. Image caption 2.5 s, text summary 2.8 s. Unsupported binary → stored and skipped. Path-traversal attempt → 403. 1 version per object after the metadata update.
+  - Headless Chrome (Playwright) drove the real UI: light at 1100 px and dark at 390 px. 0 console errors, no horizontal scroll.
+  - Fix from that review: on mobile, non-image files got a large empty thumbnail; now only real image previews expand.

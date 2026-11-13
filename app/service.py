@@ -96,6 +96,7 @@ class FileService:
             version = self.storage.put(io.BytesIO(data), key, content_type, base_meta)
         except Exception as e:  # StorageError or unexpected
             result.error = str(e)
+            result.description_status = "skipped"
             result.timings_ms = {"store": ms(t), "total": ms(t0)}
             return result
         result.status, result.version_id = "stored", version
