@@ -28,3 +28,11 @@ ADR-lite. Each entry records the context, the decision, and the alternatives we 
 **Decision:** Claude Opus 5.5 with `output_config.effort="low"` and a JSON-schema structured output `{kind, description, tags}`.
 **Why:** It's the current default model. Captions and short summaries are simple tasks, so low effort keeps latency and cost down without changing model. Structured output removes fragile string parsing. `tags` comes almost free and makes useful metadata. The model is configurable via `CLAUDE_MODEL`.
 **Refusals:** Opus 5.5 can decline (`stop_reason="refusal"`). We opt into server-side fallbacks (`fallbacks="default"`, beta `server-side-fallback-2026-07-01`) and still check `stop_reason` before reading the content.
+
+## D6 — Metadata encoding & size budget
+**Decision:** Percent-encode metadata values (all printable ASCII except `%` stays readable) and keep the total under ~1.9 KB.
+**Why:** S3/B2 user metadata travels as HTTP headers, so it has to be ASCII, and S3 caps it at 2 KB. Without encoding, a caption like "café" would break the upload. The description is therefore deliberately *short*. The full text is also returned to the caller.
+
+## D7 — Object key scheme
+**Decision:** `<prefix>YYYY/MM/DD/<uuid8>-<sanitized original name>`. The original filename is kept verbatim in metadata.
+**Why:** Uploading the same filename twice never overwrites anything, the keys are browsable by date in the B2 UI, and the sanitization blocks `../` tricks.
