@@ -66,3 +66,14 @@ One entry per step/iteration. Each step ends in a git commit (`git log --oneline
   - End-to-end over HTTP against a local S3 emulator (`moto_server`) with the **real Claude API**. Image caption 2.5 s, text summary 2.8 s. Unsupported binary → stored and skipped. Path-traversal attempt → 403. 1 version per object after the metadata update.
   - Headless Chrome (Playwright) drove the real UI: light at 1100 px and dark at 390 px. 0 console errors, no horizontal scroll.
   - Fix from that review: on mobile, non-image files got a large empty thumbnail; now only real image previews expand.
+
+## Step 5 — Live on real Backblaze B2
+- Bucket `ai-interview-ariane-breton` (private, `s3.us-east-005.backblazeb2.com`, SSE enabled, lifecycle "keep all versions"). Credentials are in `.env` (git-ignored, `chmod 600`).
+- `cli.py --check` → bucket reachable, Claude key found.
+- Real uploads: store ~0.2–0.7 s, describe ~2.4 s, attach (server-side copy) ~0.4–0.5 s, **total ~3–3.7 s**.
+- Verified on B2 itself:
+  - Metadata reads back via `HeadObject` (`ai-description`, `ai-tags`, `ai-kind`, `ai-model`, `ai-status`, `sha256`...).
+  - **One version per object** even under "keep all versions" (pre-description version deleted).
+  - UTF-8 filename and description (`recette café.txt`, `65 °C`, `☕`) round-trip correctly (D6 works on real B2).
+  - Presigned URL downloads the original bytes.
+- UI fix found during the live review: bucket thumbnails were blank until B2 answered. They're now lazy `<img>` elements over a file-type label, so a slow or failed preview falls back to "JPG" and never shows a blank box.

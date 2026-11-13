@@ -254,8 +254,12 @@ async function loadRecent() {
       const th = document.createElement("div");
       th.className = "thumb";
       th.setAttribute("aria-hidden", "true");
-      if (it.content_type.startsWith("image/")) th.style.backgroundImage = `url("${it.url}")`;
-      else th.textContent = ext(it.filename);
+      th.textContent = ext(it.filename); // fallback label while loading / if the preview fails
+      if (it.content_type.startsWith("image/")) {
+        const img = Object.assign(document.createElement("img"), { src: it.url, alt: "", loading: "lazy", decoding: "async" });
+        img.onerror = () => img.remove();
+        th.append(img);
+      }
       const body = document.createElement("div");
       body.style.minWidth = "0";
       const h = Object.assign(document.createElement("h3"), { textContent: it.filename });
