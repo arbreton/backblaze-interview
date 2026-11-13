@@ -97,3 +97,29 @@ def test_describe_and_attach_both_fail_keeps_real_error(settings, storage, monke
     res = service.process(b"hello", "a.txt", "text/plain")
     assert res.status == "stored" and res.description_status == "failed"
     assert "declined" in res.error
+
+
+def test_redescribe_fixes_failed_file_without_reupload(client, settings, storage):
+    # First attempt: Claude declines -> stored, description failed.
+    bad, _ = fake_client({}, stop_reason="refusal")
+    res = FileService(storage, Describer(settings, client=bad)).process(b"Quarterly plan.", "plan.txt", "text/plain")
+    assert res.description_status == "failed"
+    assert storage.head(res.key).metadata["ai-error"]
+
+    # Retry through the API (fixture's describer works).
+    r = client.post("/api/files/redescribe", json={"key": res.key})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "described" and body["key"] == res.key
+    meta = storage.head(res.key).metadata
+    assert meta["ai-status"] == "attached"
+    assert "ai-error" not in meta                     # stale failure info removed
+    assert meta["sha256"] == res.sha256               # provenance preserved
+    versions = storage.client.list_object_versions(Bucket=storage.bucket, Prefix=res.key)["Versions"]
+    assert len(versions) == 1
+
+
+def test_redescribe_rejects_foreign_or_missing_keys(client):
+    assert client.post("/api/files/redescribe", json={"key": "secrets/x"}).status_code == 400
+    assert client.post("/api/files/redescribe", json={"key": "uploads/../x"}).status_code == 400
+    assert client.post("/api/files/redescribe", json={"key": "uploads/nope.txt"}).status_code == 404

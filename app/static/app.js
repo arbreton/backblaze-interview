@@ -119,7 +119,7 @@ function renderResult(li, r) {
   if (notes.length) { const n = $(".note", li); n.hidden = false; n.textContent = notes.join(" "); }
 
   const actions = $(".actions", li);
-  if (r.description || r.url) actions.hidden = false;
+  if (r.description || r.url || r.description_status === "failed") actions.hidden = false;
   const copy = $(".copy", li);
   copy.hidden = !r.description;
   copy.onclick = async () => {
@@ -130,6 +130,9 @@ function renderResult(li, r) {
   const open = $(".open", li);
   open.hidden = !r.url;
   if (r.url) open.href = r.url;
+  const retry = $(".retry", li);
+  retry.hidden = !(r.description_status === "failed" && r.key);
+  retry.onclick = () => { retry.disabled = true; retryDescription(r.key, r.filename, r.size); };
 
   announce(`${r.filename}: ${BADGE[r.status] ?? r.status}${r.description ? `. ${r.description}` : ""}`);
 }
@@ -154,6 +157,7 @@ async function errorMessage(status, bodyText) {
 
 // ---------------------------------------------------------------- streamed server stages (NDJSON)
 const STAGES = {
+  // a retry starts at "describing" (the file is already in B2)
   storing: ["Saving to Backblaze B2…", null],
   stored: ["Saved to B2 ✓ — asking Claude for a description…", null],
   describing: ["Saved to B2 ✓ — Claude is writing a description…", null],
@@ -236,6 +240,36 @@ document.addEventListener("paste", (e) => {
   if (files.length) handleFiles(files);
 });
 
+// POST JSON, render streamed stages into `li`. Returns true if a result arrived.
+async function streamJSON(url, payload, li) {
+  try {
+    const res = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) { renderError(li, await errorMessage(res.status, await res.text())); return false; }
+    const read = ndjsonReader(li), reader = res.body.getReader(), dec = new TextDecoder();
+    let text = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += dec.decode(value, { stream: true });
+      read(text);
+    }
+    if (read(text, true)) return true;
+    renderError(li, "The server closed the connection before finishing.");
+  } catch { renderError(li, "Network error — is the server running?"); }
+  return false;
+}
+
+// Retry the AI description of a stored file, in a fresh session card.
+async function retryDescription(key, filename, size) {
+  const li = createCard(filename, size, null);
+  setStage(li, "Downloading from B2…", null);
+  li.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
+  await streamJSON("/api/files/redescribe?stream=true", { key }, li);
+  loadRecent();
+}
+
 // ---------------------------------------------------------------- local path
 $("#path-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -247,25 +281,9 @@ $("#path-form").addEventListener("submit", async (e) => {
   btn.disabled = true;
   const li = createCard(path.split("/").pop(), null, null);
   setStage(li, "Reading file…", null);
-  try {
-    const res = await fetch("/api/files/from-path?stream=true", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
-    });
-    if (res.ok && res.body) {
-      const read = ndjsonReader(li), reader = res.body.getReader(), dec = new TextDecoder();
-      let text = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        text += dec.decode(value, { stream: true });
-        read(text);
-      }
-      if (!read(text, true)) renderError(li, "The server closed the connection before finishing.");
-      input.value = "";
-      loadRecent();
-    } else renderError(li, await errorMessage(res.status, await res.text()));
-  } catch { renderError(li, "Network error — is the server running?"); }
-  finally { btn.disabled = false; }
+  if (await streamJSON("/api/files/from-path?stream=true", { path }, li)) input.value = "";
+  btn.disabled = false;
+  loadRecent();
 });
 
 $("#clear-results").addEventListener("click", () => {
@@ -316,7 +334,16 @@ async function loadRecent() {
       }
       const open = Object.assign(document.createElement("a"), { className: "btn small ghost open", href: it.url, target: "_blank", rel: "noopener", textContent: "Open" });
       open.setAttribute("aria-label", `Open ${it.filename}`);
-      row.append(th, body, open);
+      const side = document.createElement("div");
+      side.className = "side";
+      side.append(open);
+      if (it.description_status === "failed" || it.description_status === "pending") {
+        const retry = Object.assign(document.createElement("button"), { type: "button", className: "btn small", textContent: "Retry" });
+        retry.setAttribute("aria-label", `Retry description for ${it.filename}`);
+        retry.onclick = () => { retry.disabled = true; retryDescription(it.key, it.filename, it.size); };
+        side.append(retry);
+      }
+      row.append(th, body, side);
       return row;
     }));
   } catch { empty("Couldn't load files."); }

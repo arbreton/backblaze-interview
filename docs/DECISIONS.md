@@ -61,3 +61,7 @@ ADR-lite. Each entry records the context, the decision, and the alternatives we 
 **Decision:** An opt-in `?stream=true` on the upload endpoints streams newline-delimited JSON events. Without it, the plain JSON response is unchanged.
 **Why:** It needs no job store, no second request, and no extra infrastructure. It works with XHR (keeps real upload-progress events) and with `curl -N`.
 **Rejected:** SSE, which is GET-only for `EventSource` and so would need an upload-then-subscribe job id and server-side state. WebSockets are overkill. Polling needs a job store.
+
+## D14 — Retry re-reads from B2, not from the client
+**Decision:** The retry endpoint takes only the object key and downloads the bytes from B2.
+**Why:** The client doesn't need the file again, and one shared code path means retried and fresh descriptions behave identically. The prefix check stops callers from describing arbitrary objects in the bucket.

@@ -48,20 +48,20 @@ def _respond(result) -> JSONResponse:
     return JSONResponse(result.to_dict(), status_code=code)
 
 
-def _run(service: FileService, stream: bool, data: bytes, filename: str, ctype: str | None, source: str):
-    """Plain JSON by default; with ?stream=true, NDJSON stage events then the result.
+def _run(stream: bool, job):
+    """Run `job(on_stage) -> Result`. Plain JSON by default; with ?stream=true,
+    NDJSON stage events then the result.
 
     Stream lines:  {"event":"stage","stage":"stored"} ... {"event":"result","result":{...}}
     """
     if not stream:
-        return _respond(service.process(data, filename, ctype, source=source))
+        return _respond(job(None))
 
     events: queue.Queue = queue.Queue()
 
     def work():
         try:
-            r = service.process(data, filename, ctype, source=source,
-                                on_stage=lambda s: events.put({"event": "stage", "stage": s}))
+            r = job(lambda s: events.put({"event": "stage", "stage": s}))
             events.put({"event": "result", "result": r.to_dict()})
         except Exception as e:  # never leave the client hanging
             events.put({"event": "error", "error": f"Unexpected error: {e}"})
@@ -108,7 +108,8 @@ def upload_file(
         raise HTTPException(413, f"File exceeds the {settings.max_upload_mb} MB limit.")
     if not data:
         raise HTTPException(400, "File is empty.")
-    return _run(service, stream, data, file.filename or "upload", file.content_type, "upload")
+    name = file.filename or "upload"
+    return _run(stream, lambda cb: service.process(data, name, file.content_type, "upload", cb))
 
 
 class PathRequest(BaseModel):
@@ -133,7 +134,30 @@ def upload_from_path(
     if p.stat().st_size == 0:
         raise HTTPException(400, "File is empty.")
     ctype = mimetypes.guess_type(p.name)[0]
-    return _run(service, stream, p.read_bytes(), p.name, ctype, "local-path")
+    data = p.read_bytes()
+    return _run(stream, lambda cb: service.process(data, p.name, ctype, "local-path", cb))
+
+
+class KeyRequest(BaseModel):
+    key: str
+
+
+@app.post("/api/files/redescribe", summary="Retry the AI description of an already-stored file (no re-upload)")
+def redescribe(
+    body: KeyRequest,
+    stream: bool = Query(False, description="Stream NDJSON progress events"),
+    service: FileService = Depends(get_service),
+    settings: Settings = Depends(get_settings),
+):
+    if not body.key.startswith(settings.b2_prefix) or ".." in body.key:
+        raise HTTPException(400, "Key is outside this service's prefix.")
+    try:
+        obj = service.storage.head(body.key)
+    except StorageError:
+        raise HTTPException(404, "No such file in the bucket.")
+    if obj.size > settings.max_upload_bytes:
+        raise HTTPException(413, f"File exceeds the {settings.max_upload_mb} MB limit.")
+    return _run(stream, lambda cb: service.redescribe(body.key, cb))
 
 
 @app.get("/api/files", summary="Recently stored files with their AI metadata")

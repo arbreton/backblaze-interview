@@ -114,6 +114,38 @@ class FileService:
         result.timings_ms["store"] = ms(t)
         stage("stored")
 
+        self._describe_and_attach(result, data, kind, base_meta, version, stage)
+        result.timings_ms["total"] = ms(t0)
+        return result
+
+    def redescribe(self, key: str, on_stage: Callable[[str], None] | None = None) -> Result:
+        """Retry the AI description for an already-stored object (no re-upload)."""
+        stage = on_stage or (lambda _s: None)
+        t0 = time.perf_counter()
+        obj = self.storage.head(key)  # raises StorageError if missing
+        if obj.size > self.storage.settings.max_upload_bytes:
+            raise ValueError(f"Object is larger than {self.storage.settings.max_upload_mb} MB")
+        data = self.storage.get_bytes(key)
+        filename = obj.metadata.get("original-filename") or key.rsplit("/", 1)[-1]
+        # Keep the provenance fields; drop old ai-* fields so stale values never linger.
+        base_meta = {k: v for k, v in obj.metadata.items() if not k.startswith("ai-")}
+        base_meta.setdefault("original-filename", filename[:200])
+        base_meta.setdefault("sha256", hashlib.sha256(data).hexdigest())
+        result = Result(
+            filename=filename, size=obj.size, content_type=obj.content_type, status="stored",
+            description_status="pending", key=key, bucket=self.storage.bucket,
+            version_id=obj.version_id, sha256=base_meta["sha256"],
+        )
+        kind = detect_kind(data, filename, obj.content_type)
+        self._describe_and_attach(result, data, kind, base_meta, obj.version_id, stage)
+        result.timings_ms["total"] = int((time.perf_counter() - t0) * 1000)
+        return result
+
+    def _describe_and_attach(self, result: Result, data: bytes, kind, base_meta: dict[str, str],
+                             version: str | None, stage: Callable[[str], None]) -> None:
+        ms = lambda since: int((time.perf_counter() - since) * 1000)  # noqa: E731
+        key, content_type, filename = result.key, result.content_type, result.filename
+
         # 2) Describe
         if kind == "unsupported":
             result.description_status = "skipped"
@@ -160,5 +192,3 @@ class FileService:
             result.url = self.storage.presigned_url(key)
         except Exception:
             pass
-        result.timings_ms["total"] = ms(t0)
-        return result

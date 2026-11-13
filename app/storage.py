@@ -152,6 +152,12 @@ class B2Storage:
             last_modified=h.get("LastModified"),
         )
 
+    def get_bytes(self, key: str) -> bytes:
+        try:
+            return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        except (ClientError, BotoCoreError) as e:
+            raise self._wrap("download", e) from e
+
     def list_recent(self, limit: int = 20) -> list[StoredObject]:
         """Most recent objects under the prefix, with their metadata."""
         try:

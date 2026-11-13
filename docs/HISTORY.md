@@ -87,3 +87,10 @@ One entry per step/iteration. Each step ends in a git commit (`git log --oneline
 - Headless Chrome confirmed the stage text sequence in the real UI, with 0 JS errors.
 - **Bug fix:** if both the description *and* writing the failure marker failed, the error said "Description generated but could not be attached". It now keeps the real cause. A regression test was added.
 - Tests: 19 passing.
+
+## Iteration 7 — Retry a failed description without re-uploading
+- **Problem:** if Claude failed (rate limit, refusal, outage), the file stayed in B2 with `ai-status=failed` and the only fix was to upload it again.
+- `FileService.redescribe(key)` downloads the stored object and reruns the same describe → attach code as a fresh upload (the shared `_describe_and_attach`). It keeps provenance metadata (`sha256`, `original-filename`, `uploaded-at`) and clears stale `ai-*` and `ai-error` fields.
+- `POST /api/files/redescribe {key}`, with `?stream=true` support. Guards: the key must be under the service prefix (400), exist (404), and be within the size limit (413).
+- UI: a **Retry** button on failed or pending items in "In the bucket" and on failed result cards.
+- Tests: 21 passing. The live retry demo was skipped to finish quickly, so retry is verified against the mocked bucket only.
