@@ -28,3 +28,19 @@ One entry per step/iteration. Each step ends in a git commit (`git log --oneline
 - Opus 5.5 at `effort=low`, server-side refusal fallback, typed error mapping (auth/rate-limit/bad-request/connection).
 - Prompt-injection guard: the system prompt treats file content as data, not instructions.
 - Tests: 11 passing (fake client). **Live check** with the real key: image caption 2.8 s (817→106 tokens), markdown summary 2.5 s. Both accurate.
+
+## Step 3 — Service orchestration, JSON API, CLI
+- `app/service.py` `FileService.process()`: **store → describe → attach**. Returns `filename, size, status, description, tags, key, url, timings_ms`, and the related fields.
+  - `status`: `described` (stored and described) · `stored` (in B2, description skipped or failed) · `failed` (B2 upload failed).
+  - `description_status`: `attached` · `skipped` · `failed`. The bucket also records `ai-status` so it reflects the outcome.
+  - If Claude fails, the file is still stored and the error is recorded in metadata (`ai-error`).
+  - `fit_metadata` shortens the description if the header budget is exceeded.
+- `app/main.py` endpoints:
+  - `POST /api/files` (multipart upload, size-capped)
+  - `POST /api/files/from-path` (sandboxed to `LOCAL_PATH_ROOT`)
+  - `GET /api/files` (recent files with metadata and presigned URLs)
+  - `GET /api/health`
+  - OpenAPI docs at `/docs`
+  - If B2 isn't configured, the API returns a clear 503 that points to `docs/B2_SETUP.md`.
+- `cli.py`: `cli.py <paths…>` and `cli.py --check`.
+- Tests: 17 passing. Covers the end-to-end upload (metadata verified in the bucket), unsupported → skipped, refusal → still stored, 413, path sandbox (`/etc/hosts` and `..` → 403).

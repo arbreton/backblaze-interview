@@ -44,3 +44,15 @@ ADR-lite. Each entry records the context, the decision, and the alternatives we 
 ## D9 — File type by content sniffing
 **Decision:** Classify from the bytes rather than the client-supplied `Content-Type` or extension.
 **Why:** Browsers send `application/octet-stream` for many files, and extensions lie. Sniffing is cheap and keeps us from sending binary junk to the model.
+
+## D10 — Local-path input is sandboxed
+**Decision:** `POST /api/files/from-path` accepts only paths that resolve, after symlink and `..` resolution, inside `LOCAL_PATH_ROOT` (default `~/Desktop`). The CLI is the primary way to submit local paths.
+**Why:** An endpoint that reads arbitrary server paths is a file-exfiltration hole (`/etc/passwd`, `~/.ssh`, the Claude key itself...).
+
+## D11 — Partial success is a success, with honest status
+**Decision:** Storing is the critical path. AI description is best-effort. HTTP 201 means the file is stored; `status` and `description_status` tell the caller exactly what happened. HTTP 502 is returned only when B2 storage fails.
+**Why:** The user's file shouldn't be lost because an LLM call failed, and the caller can retry the description later without re-uploading.
+
+## D12 — Files are buffered in memory (capped at 50 MB)
+**Decision:** The upload is read into memory up to `MAX_UPLOAD_MB`.
+**Why:** Claude needs the bytes anyway, and hashing and sniffing are trivial in memory. For multi-GB files you'd stream to B2 and describe from a sample instead. That's out of scope for "a small service".

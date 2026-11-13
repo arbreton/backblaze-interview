@@ -1,0 +1,73 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main
+from app.config import get_settings
+from app.describer import Describer
+from app.service import FileService
+from tests.test_describer import fake_client
+
+
+@pytest.fixture
+def client(settings, storage):
+    fake, msgs = fake_client({"description": "A small red rectangle.", "tags": ["red", "shape"]})
+    service = FileService(storage, Describer(settings, client=fake))
+    main.app.dependency_overrides[main.get_service] = lambda: service
+    main.app.dependency_overrides[get_settings] = lambda: settings
+    yield TestClient(main.app)
+    main.app.dependency_overrides.clear()
+
+
+def test_upload_image_end_to_end(client, storage, png_bytes):
+    r = client.post("/api/files", files={"file": ("red.png", png_bytes, "image/png")})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "described"
+    assert body["description_status"] == "attached"
+    assert body["filename"] == "red.png" and body["size"] == len(png_bytes)
+    assert body["description"] == "A small red rectangle."
+
+    meta = storage.head(body["key"]).metadata
+    assert meta["ai-description"] == "A small red rectangle."
+    assert meta["ai-tags"] == "red, shape"
+    assert meta["original-filename"] == "red.png"
+
+    listed = client.get("/api/files").json()
+    assert listed[0]["description"] == "A small red rectangle."
+
+
+def test_unsupported_file_is_stored_but_skipped(client):
+    r = client.post("/api/files", files={"file": ("blob.bin", b"\x00\x01\x02", "application/octet-stream")})
+    body = r.json()
+    assert r.status_code == 201
+    assert body["status"] == "stored" and body["description_status"] == "skipped"
+
+
+def test_describe_failure_still_stores(settings, storage):
+    fake, _ = fake_client({}, stop_reason="refusal")
+    service = FileService(storage, Describer(settings, client=fake))
+    res = service.process(b"hello world", "a.txt", "text/plain")
+    assert res.status == "stored" and res.description_status == "failed"
+    assert storage.head(res.key).metadata["ai-status"] == "failed"
+
+
+def test_too_large(client):
+    r = client.post("/api/files", files={"file": ("big.txt", b"a" * (1024 * 1024 + 1), "text/plain")})
+    assert r.status_code == 413
+
+
+def test_from_path_sandboxed(client, settings, tmp_path):
+    f = tmp_path / "note.txt"
+    f.write_text("Buy milk and eggs.")
+    ok = client.post("/api/files/from-path", json={"path": str(f)})
+    assert ok.status_code == 201 and ok.json()["status"] == "described"
+
+    denied = client.post("/api/files/from-path", json={"path": "/etc/hosts"})
+    assert denied.status_code == 403
+    traversal = client.post("/api/files/from-path", json={"path": str(tmp_path / ".." / "x")})
+    assert traversal.status_code == 403
+
+
+def test_health(client):
+    h = client.get("/api/health").json()
+    assert h["claude"]["configured"] is True
