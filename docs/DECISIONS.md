@@ -56,3 +56,8 @@ ADR-lite. Each entry records the context, the decision, and the alternatives we 
 ## D12 — Files are buffered in memory (capped at 50 MB)
 **Decision:** The upload is read into memory up to `MAX_UPLOAD_MB`.
 **Why:** Claude needs the bytes anyway, and hashing and sniffing are trivial in memory. For multi-GB files you'd stream to B2 and describe from a sample instead. That's out of scope for "a small service".
+
+## D13 — Progress via NDJSON streaming over the same POST (not SSE/WebSockets/polling)
+**Decision:** An opt-in `?stream=true` on the upload endpoints streams newline-delimited JSON events. Without it, the plain JSON response is unchanged.
+**Why:** It needs no job store, no second request, and no extra infrastructure. It works with XHR (keeps real upload-progress events) and with `curl -N`.
+**Rejected:** SSE, which is GET-only for `EventSource` and so would need an upload-then-subscribe job id and server-side state. WebSockets are overkill. Polling needs a job store.

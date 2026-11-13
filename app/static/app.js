@@ -152,6 +152,32 @@ async function errorMessage(status, bodyText) {
   return { 413: "File is too large.", 503: "Service not configured." }[status] ?? `Request failed (HTTP ${status}).`;
 }
 
+// ---------------------------------------------------------------- streamed server stages (NDJSON)
+const STAGES = {
+  storing: ["Saving to Backblaze B2…", null],
+  stored: ["Saved to B2 ✓ — asking Claude for a description…", null],
+  describing: ["Saved to B2 ✓ — Claude is writing a description…", null],
+  attaching: ["Description ready ✓ — attaching it to the file in B2…", 92],
+};
+
+// Feed it the full response text as it grows; it handles each complete line exactly once.
+function ndjsonReader(li) {
+  let seen = 0, done = false;
+  return (text, final = false) => {
+    const lines = text.split("\n");
+    const complete = final ? lines : lines.slice(0, -1);
+    for (; seen < complete.length; seen++) {
+      const line = complete[seen].trim();
+      if (!line) continue;
+      let ev; try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.event === "stage" && STAGES[ev.stage]) setStage(li, ...STAGES[ev.stage]);
+      else if (ev.event === "result") { renderResult(li, ev.result); done = true; }
+      else if (ev.event === "error") { renderError(li, ev.error); done = true; }
+    }
+    return done;
+  };
+}
+
 // ---------------------------------------------------------------- upload (XHR for real progress)
 function uploadFile(file) {
   const li = createCard(file.name, file.size, file);
@@ -160,17 +186,19 @@ function uploadFile(file) {
   setStage(li, "Waiting…", 0);
   state.queue.push(() => new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/files");
+    const read = ndjsonReader(li);
+    xhr.open("POST", "/api/files?stream=true");
+    // Upload is the first 40% of the bar; server stages take it from there.
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const pct = (e.loaded / e.total) * 100;
-      if (pct < 100) setStage(li, `Uploading… ${Math.round(pct)}%`, pct);
-      else setStage(li, "Storing in B2 and generating description…", null);
+      setStage(li, `Uploading… ${Math.round(pct)}%`, pct * 0.4);
     };
-    xhr.upload.onload = () => setStage(li, "Storing in B2 and generating description…", null);
+    xhr.upload.onload = () => setStage(li, ...STAGES.storing);
+    xhr.onprogress = () => { if (xhr.status === 200) read(xhr.responseText); };
     xhr.onload = async () => {
-      if (xhr.status === 201 || xhr.status === 502) {
-        try { renderResult(li, JSON.parse(xhr.responseText)); } catch { renderError(li, "Unexpected server response."); }
+      if (xhr.status === 200) {
+        if (!read(xhr.responseText, true)) renderError(li, "The server closed the connection before finishing.");
       } else renderError(li, await errorMessage(xhr.status, xhr.responseText));
       resolve();
     };
@@ -218,15 +246,24 @@ $("#path-form").addEventListener("submit", async (e) => {
   const btn = $('button[type="submit"]', e.target);
   btn.disabled = true;
   const li = createCard(path.split("/").pop(), null, null);
-  setStage(li, "Reading file, storing in B2 and generating description…", null);
+  setStage(li, "Reading file…", null);
   try {
-    const res = await fetch("/api/files/from-path", {
+    const res = await fetch("/api/files/from-path?stream=true", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
     });
-    const text = await res.text();
-    if (res.status === 201 || res.status === 502) renderResult(li, JSON.parse(text));
-    else renderError(li, await errorMessage(res.status, text));
-    if (res.ok) { input.value = ""; loadRecent(); }
+    if (res.ok && res.body) {
+      const read = ndjsonReader(li), reader = res.body.getReader(), dec = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += dec.decode(value, { stream: true });
+        read(text);
+      }
+      if (!read(text, true)) renderError(li, "The server closed the connection before finishing.");
+      input.value = "";
+      loadRecent();
+    } else renderError(li, await errorMessage(res.status, await res.text()));
   } catch { renderError(li, "Network error — is the server running?"); }
   finally { btn.disabled = false; }
 });

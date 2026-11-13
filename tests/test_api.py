@@ -71,3 +71,29 @@ def test_from_path_sandboxed(client, settings, tmp_path):
 def test_health(client):
     h = client.get("/api/health").json()
     assert h["claude"]["configured"] is True
+
+
+def test_stream_emits_stages_then_result(client, png_bytes):
+    import json
+
+    r = client.post("/api/files?stream=true", files={"file": ("red.png", png_bytes, "image/png")})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in r.text.splitlines() if line]
+    stages = [e["stage"] for e in events if e["event"] == "stage"]
+    assert stages == ["storing", "stored", "describing", "attaching"]
+    assert events[-1]["event"] == "result"
+    assert events[-1]["result"]["status"] == "described"
+
+
+def test_describe_and_attach_both_fail_keeps_real_error(settings, storage, monkeypatch):
+    fake, _ = fake_client({}, stop_reason="refusal")
+    service = FileService(storage, Describer(settings, client=fake))
+
+    def boom(*a, **k):
+        raise RuntimeError("b2 down")
+
+    monkeypatch.setattr(storage, "replace_metadata", boom)
+    res = service.process(b"hello", "a.txt", "text/plain")
+    assert res.status == "stored" and res.description_status == "failed"
+    assert "declined" in res.error

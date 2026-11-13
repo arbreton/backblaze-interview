@@ -77,3 +77,13 @@ One entry per step/iteration. Each step ends in a git commit (`git log --oneline
   - UTF-8 filename and description (`recette café.txt`, `65 °C`, `☕`) round-trip correctly (D6 works on real B2).
   - Presigned URL downloads the original bytes.
 - UI fix found during the live review: bucket thumbnails were blank until B2 answered. They're now lazy `<img>` elements over a file-type label, so a slow or failed preview falls back to "JPG" and never shows a blank box.
+
+## Iteration 6 — Honest progress: streamed stages (NDJSON)
+- **Problem seen in Step 5:** after the upload hit 100%, the UI showed one vague "Storing and describing…" spinner for about 3 s, even though the file was safely in B2 within ~1 s.
+- `FileService.process(on_stage=…)` emits `storing → stored → describing → attaching`.
+- `POST /api/files?stream=true` (and `/from-path?stream=true`) returns `application/x-ndjson`: one stage event per line, then `{"event":"result",…}`. Without `stream`, curl users get the same single JSON response as before (backwards compatible).
+- UI: XHR `onprogress` / fetch `ReadableStream` feed one incremental NDJSON parser. Copy now says "Saved to B2 ✓ — Claude is writing a description…", so the user knows the file is safe before the AI step ends.
+- Live timing on B2 (`curl -N`): stored at +0.98 s, attaching at +3.59 s, result at +3.84 s.
+- Headless Chrome confirmed the stage text sequence in the real UI, with 0 JS errors.
+- **Bug fix:** if both the description *and* writing the failure marker failed, the error said "Description generated but could not be attached". It now keeps the real cause. A regression test was added.
+- Tests: 19 passing.

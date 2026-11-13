@@ -7,7 +7,7 @@ import io
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Callable, Literal
 
 from .describer import Describer, DescribeError, Description, detect_kind
 from .storage import METADATA_BUDGET_BYTES, B2Storage, build_key, metadata_size
@@ -67,7 +67,17 @@ class FileService:
         self.storage = storage
         self.describer = describer
 
-    def process(self, data: bytes, filename: str, content_type: str | None, source: str = "upload") -> Result:
+    def process(
+        self,
+        data: bytes,
+        filename: str,
+        content_type: str | None,
+        source: str = "upload",
+        on_stage: Callable[[str], None] | None = None,
+    ) -> Result:
+        """Store -> describe -> attach. `on_stage` is called with
+        'storing' | 'stored' | 'describing' | 'attaching' as work progresses."""
+        stage = on_stage or (lambda _s: None)
         t0 = time.perf_counter()
         ms = lambda since: int((time.perf_counter() - since) * 1000)  # noqa: E731
 
@@ -91,6 +101,7 @@ class FileService:
         )
 
         # 1) Store — the file is safe in B2 before any AI work happens.
+        stage("storing")
         t = time.perf_counter()
         try:
             version = self.storage.put(io.BytesIO(data), key, content_type, base_meta)
@@ -101,6 +112,7 @@ class FileService:
             return result
         result.status, result.version_id = "stored", version
         result.timings_ms["store"] = ms(t)
+        stage("stored")
 
         # 2) Describe
         if kind == "unsupported":
@@ -110,6 +122,7 @@ class FileService:
             result.description_status = "skipped"
             result.error = "No AI description: Claude API key not configured."
         else:
+            stage("describing")
             t = time.perf_counter()
             try:
                 desc = self.describer.describe(data, filename, kind)
@@ -124,6 +137,7 @@ class FileService:
                 meta = fit_metadata(base_meta, desc)
             else:
                 meta = {**base_meta, "ai-status": "failed", "ai-error": (result.error or "")[:200]}
+            stage("attaching")
             t = time.perf_counter()
             try:
                 result.version_id = self.storage.replace_metadata(key, content_type, meta, delete_version=version)
@@ -132,7 +146,9 @@ class FileService:
                     result.description = meta["ai-description"]
             except Exception as e:
                 result.description_status = "failed"
-                result.error = f"Description generated but could not be attached: {e}"
+                if desc:
+                    result.error = f"Description generated but could not be attached: {e}"
+                # else: keep the original describe error — that's the real cause
             if desc:
                 # Return the description even if attaching failed — the caller still gets value.
                 result.description = result.description or desc.text

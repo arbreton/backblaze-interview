@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
+import queue
+import threading
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -45,6 +48,35 @@ def _respond(result) -> JSONResponse:
     return JSONResponse(result.to_dict(), status_code=code)
 
 
+def _run(service: FileService, stream: bool, data: bytes, filename: str, ctype: str | None, source: str):
+    """Plain JSON by default; with ?stream=true, NDJSON stage events then the result.
+
+    Stream lines:  {"event":"stage","stage":"stored"} ... {"event":"result","result":{...}}
+    """
+    if not stream:
+        return _respond(service.process(data, filename, ctype, source=source))
+
+    events: queue.Queue = queue.Queue()
+
+    def work():
+        try:
+            r = service.process(data, filename, ctype, source=source,
+                                on_stage=lambda s: events.put({"event": "stage", "stage": s}))
+            events.put({"event": "result", "result": r.to_dict()})
+        except Exception as e:  # never leave the client hanging
+            events.put({"event": "error", "error": f"Unexpected error: {e}"})
+        events.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def lines():
+        while (ev := events.get()) is not None:
+            yield json.dumps(ev) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # --- routes -----------------------------------------------------------------
 
 @app.get("/", include_in_schema=False)
@@ -66,6 +98,7 @@ def health(settings: Settings = Depends(get_settings)):
 @app.post("/api/files", status_code=201, summary="Upload a file (multipart/form-data, field 'file')")
 def upload_file(
     file: UploadFile = File(...),
+    stream: bool = Query(False, description="Stream NDJSON progress events"),
     service: FileService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ):
@@ -75,7 +108,7 @@ def upload_file(
         raise HTTPException(413, f"File exceeds the {settings.max_upload_mb} MB limit.")
     if not data:
         raise HTTPException(400, "File is empty.")
-    return _respond(service.process(data, file.filename or "upload", file.content_type, source="upload"))
+    return _run(service, stream, data, file.filename or "upload", file.content_type, "upload")
 
 
 class PathRequest(BaseModel):
@@ -85,6 +118,7 @@ class PathRequest(BaseModel):
 @app.post("/api/files/from-path", status_code=201, summary="Store a file from a local path on the server")
 def upload_from_path(
     body: PathRequest,
+    stream: bool = Query(False, description="Stream NDJSON progress events"),
     service: FileService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ):
@@ -99,7 +133,7 @@ def upload_from_path(
     if p.stat().st_size == 0:
         raise HTTPException(400, "File is empty.")
     ctype = mimetypes.guess_type(p.name)[0]
-    return _respond(service.process(p.read_bytes(), p.name, ctype, source="local-path"))
+    return _run(service, stream, p.read_bytes(), p.name, ctype, "local-path")
 
 
 @app.get("/api/files", summary="Recently stored files with their AI metadata")
